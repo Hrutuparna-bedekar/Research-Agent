@@ -1,16 +1,20 @@
 from typing import TypedDict
 from typing import Literal
-
+from typing import Annotated
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 class PlanStep(TypedDict):
-    step_index:int
+    step:str
     queries:list[str]
 
 class State(TypedDict):
     query:str
- 
     research_type:str
     complexity:str
     
+    summary:str
+    messages:Annotated[list[BaseMessage],add_messages]
+
     plan:list[PlanStep]
     plan_step_index:int
     
