@@ -9,7 +9,7 @@ fastapi
 uvicorn
 python-dotenv
 markdown
-weasyprint
+fpdf2
 scikit-learn
 huggingface_hub
 langchain-huggingface
