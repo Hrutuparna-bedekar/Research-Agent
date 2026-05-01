@@ -17,7 +17,7 @@ from typing import Any,Optional
 from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 from tavily import TavilyClient
-import nest_asyncio
+import threading
 
 load_dotenv()
 TAVILY_KEY=os.getenv("TAVILY_KEY")
@@ -64,7 +64,12 @@ def json_parser(text:str)->Any:
                 return json.loads(chunk)
             except json.JSONDecodeError:
                 cleaned=re.sub(r",\s*([}\]])" ,r"\1",chunk)
-                return json.loads(cleaned)
+                try:
+                    return json.loads(cleaned)
+                except json.JSONDecodeError as e:
+                    raise ValueError(
+                        f"json_parser failed after cleanup. Original: {chunk[:200]}"
+                    ) from e
     raise ValueError(f"No JSON object found")
  
 
@@ -74,6 +79,8 @@ def deduplication(queries:list[str],visited:list[str]):
     all_embed=embeddings.embed_documents(all_texts)
     query_embeds=all_embed[:len(queries)]
     visited_embed=all_embed[len(queries):]
+    # visited_embed_dup grows as we accept queries, preventing
+    # intra-batch duplicates as well as duplicates with visited.
     visited_embed_dup=list(visited_embed)
     
     for query,query_embed in zip(queries,query_embeds):
@@ -91,9 +98,11 @@ def deduplication(queries:list[str],visited:list[str]):
 
 class SQLiteRAG:
     
-    instance: Optional["SQLiteRAG"] = None
+    _instance: Optional["SQLiteRAG"] = None
+    _lock = threading.Lock()
 
     def __init__(self):
+        self._write_lock = threading.Lock()
         self.conn=sqlite3.connect(str(RAG_DB), check_same_thread=False)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS documents (
@@ -108,9 +117,12 @@ class SQLiteRAG:
 
     @classmethod
     def get(cls)->"SQLiteRAG":
-        if cls.instance is None:
-            cls.instance=cls()
-        return cls.instance
+        # Double-checked locking for thread-safe singleton initialisation.
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
 
   
 
@@ -125,23 +137,23 @@ class SQLiteRAG:
   
 
     def store(self, content: str, metadata: dict):
-     
         doc_id = self.doc_id(content)
-        exists = self.conn.execute(
-            "SELECT 1 FROM documents WHERE id=?", (doc_id,)
-        ).fetchone()
-        if exists:
-            return
-        try:
-            emb=embeddings.embed_documents([content])[0]
-            self.conn.execute(
-                "INSERT INTO documents(id, content, embedding, source, step) VALUES (?,?,?,?,?)",
-                (doc_id, content, json.dumps(emb),
-                 metadata.get("source", ""), metadata.get("step", ""))
-            )
-            self.conn.commit()
-        except Exception as e:
-            print(f"SQLiteRAG.store error: {e}")
+        with self._write_lock:  # serialise writes to prevent concurrent INSERT conflicts
+            exists = self.conn.execute(
+                "SELECT 1 FROM documents WHERE id=?", (doc_id,)
+            ).fetchone()
+            if exists:
+                return
+            try:
+                emb=embeddings.embed_documents([content])[0]
+                self.conn.execute(
+                    "INSERT INTO documents(id, content, embedding, source, step) VALUES (?,?,?,?,?)",
+                    (doc_id, content, json.dumps(emb),
+                     metadata.get("source", ""), metadata.get("step", ""))
+                )
+                self.conn.commit()
+            except Exception as e:
+                print(f"SQLiteRAG.store error: {e}")
 
     def search(self, query: str, n: int = 4) -> list[dict]:
        
@@ -191,17 +203,21 @@ async def websearch(query:str,api_key:str)->list[dict]:
         return []
         
 def run_async(coroutine):
+    """Run a coroutine from synchronous LangGraph node code.
+
+    Uses asyncio.run() which creates a fresh event loop — safe for FastAPI
+    worker threads where no loop is running.  Falls back to nest_asyncio
+    only in interactive environments (Jupyter) where a loop is already live.
+    """
     try:
-        loop = asyncio.get_event_loop()
+        return asyncio.run(coroutine)
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    if loop.is_running():
+        # Already inside a running event loop (e.g. Jupyter / testing).
+        # Import and apply nest_asyncio lazily — never touches the global
+        # FastAPI event loop under normal execution.
+        import nest_asyncio
         nest_asyncio.apply()
-        return loop.run_until_complete(coroutine)
-    else:
-        return loop.run_until_complete(coroutine)
+        return asyncio.get_event_loop().run_until_complete(coroutine)
                         
 
 
@@ -351,19 +367,16 @@ def execute_plan(state:State)->State:
     api_key=os.environ.get("TAVILY_KEY")
     gap_mode=state["gap_mode"]
     tag=f"gap_{state['gap_step_index']}" if gap_mode else f"{state['plan_step_index']}"
-    if gap_mode:
-        rag_docs=[]
-        for q in fresh:
-            rag_docs.extend(rag.search(q,n=3))
+    
+    HIGH_RAG_THRESHOLD = RAG_MIN_SCORE + 0.1
+    rag_hits = [doc for q in fresh for doc in rag.search(q, n=3)
+                if doc["relevance"] >= HIGH_RAG_THRESHOLD]
+
+    if rag_hits and gap_mode:
         
-        if rag_docs:
-            all_docs=rag_docs
-        else:
-            web_docs=run_async(parallel_search(queries=fresh,api_key=api_key))
-            for docs in web_docs:
-                rag.store(docs["content"],{"source":docs["source"],"step":tag})
-            all_docs=web_docs
+        all_docs = rag_hits
     else:
+        
         web_docs=run_async(parallel_search(queries=fresh,api_key=api_key))
         for docs in web_docs:
             rag.store(docs["content"],{"source":docs["source"],"step":tag})
@@ -530,20 +543,14 @@ Already searched (do NOT repeat): {visited}""")
     
 
 def generate_report(state:State)->State:
-    step_block=""
-    for f in state["findings"]:
-        label=f.get("step_label",f"tag_{f.get('tag','')}")
-        key_findings="\n".join(f"{x}" for x in f.get("key_findings",[]) if x)
-        numerical_data="\n".join(f"{x}" for x in f.get("numerical_data",[]) if x)
-        step_block+=f"\n#{label}\n{key_findings}\n{numerical_data}"
-    unresolved=state.get("unresolved_gaps",[])
-    gap_section=""
-    if unresolved:
-        gap_section="\n\n### Unresolved Gaps\n" + "\n".join([f"- {g}" for g in unresolved])
-        
+    
     step_block=""
     for step in state.get("findings",[]):
-        step_block+=f"\n### {step['step_label']}\n" + "\n".join(step.get("key_findings", [])) + "\n"
+        nums = "\n".join(step.get("numerical_data", []))
+        step_block += f"\n### {step['step_label']}\n"
+        step_block += "\n".join(step.get("key_findings", [])) + "\n"
+        if nums:
+            step_block += f"\nData: {nums}\n"
 
   
     sources = set()
@@ -593,10 +600,18 @@ Per-step findings:
     
     final_report = response.content + ref_section
     
-    return {"final_output":final_report,"messages":[
-        HumanMessage(content=state["query"]),
-        AIMessage(content=final_report)
-    ]}
+    return {
+        "final_output": final_report,
+        "messages": [
+            HumanMessage(content=state["query"]),
+            AIMessage(content=final_report)
+        ],
+        # Append the full turn to the never-pruned display log
+        "display_history": [
+            {"type": "user",   "text": state["query"]},
+            {"type": "report", "text": final_report},
+        ],
+    }
          
 def route_after_reflect(state:State)->str:
     step_idx=state["plan_step_index"]
@@ -604,6 +619,9 @@ def route_after_reflect(state:State)->str:
     missing=state["missing_topics"]
     gap_step_index=state["gap_step_index"]
     
+    if conf < 0.2 and step_idx > 1 and missing and gap_step_index < MAX_GAP_LOOPS:
+        return "generate_gap_queries"
+
     if step_idx+1<len(state["plan"]):
         return "advance_plan"
     
@@ -612,7 +630,6 @@ def route_after_reflect(state:State)->str:
     
     if gap_step_index>=MAX_GAP_LOOPS:
         return "generate_report"
-    
     
     if missing:
         return "generate_gap_queries"
@@ -626,7 +643,7 @@ def route_after_execute(state:State)->str:
 
 
 
-def router_node(state: State) -> str:
+def router_after_stm(state: State) -> str:
     prompt = f"""Analyze this query: "{state['query']}"
 Previous chat summary: {state.get("summary","")}
 Previous chat history: {state.get("messages", [])}
@@ -647,13 +664,22 @@ def chat_response(state: State) -> State:
         findings_context = "\n\nExisting Research Findings:\n" + json.dumps(state["findings"], indent=2)
     
     response = model.invoke([
-        SystemMessage(content=f"You are a helpful research assistant. Answer based on current context and findings if available. Summary: {state.get('summary','')}{findings_context}"),
+        SystemMessage(content=f"You are a helpful research assistant. Answer based on current context and findings if available. Summary: {state.get('summary','')}{findings_context},Message_history:{state.get('messages', [])}"),
         HumanMessage(content=state["query"])
     ])
-    return {"final_output": response.content, "messages": [
-        HumanMessage(content=state["query"]),
-        AIMessage(content=response.content)
-    ], "skip_summarize": True}
+    
+    return {
+        "final_output": response.content,
+        "messages": [
+            HumanMessage(content=state["query"]),
+            AIMessage(content=response.content)
+        ],
+        # Append the full turn to the never-pruned display log
+        "display_history": [
+            {"type": "user",   "text": state["query"]},
+            {"type": "report", "text": response.content},
+        ],
+    }
 
 graph=StateGraph(State)
 graph.add_node("stm_summarize",stm_summarize)
@@ -669,7 +695,7 @@ graph.add_node("generate_report",generate_report)
 graph.add_edge(START,"stm_summarize")
 graph.add_conditional_edges(
     "stm_summarize",
-    router_node,
+    router_after_stm,
     {
         "analyze_query": "analyze_query",
         "chat_response": "chat_response"
@@ -706,18 +732,29 @@ checkpointer=SqliteSaver(conn)
 
 wf=graph.compile(checkpointer=checkpointer)
 
-def get_thread_history(thread_id: str):
-    
+def get_thread_history(thread_id: str, preview_len: int = 120):
+    """Return the full, never-pruned display history for a thread.
+
+    Reads from ``display_history`` (append-only with operator.add) rather than
+    ``messages`` (which gets pruned by stm_summarize after 6 turns).
+    Each report entry also carries a short ``preview`` for the sidebar.
+    """
     config = {"configurable": {"thread_id": thread_id}}
     state = wf.get_state(config)
-    if not state or not state.values or "messages" not in state.values:
+    if not state or not state.values:
         return []
-    
-    history = []
-    for msg in state.values["messages"]:
-        if isinstance(msg, HumanMessage):
-            history.append({"type": "user", "text": msg.content})
-        elif isinstance(msg, AIMessage):
-            history.append({"type": "report", "text": msg.content})
-            
-    return history
+
+    history = state.values.get("display_history", [])
+    # Enrich AI/report entries with a preview field for the sidebar
+    enriched = []
+    for entry in history:
+        if entry.get("type") in ("report",) and "preview" not in entry:
+            text = entry.get("text", "")
+            entry = dict(entry)  # don't mutate stored state
+            entry["preview"] = (
+                text[:preview_len] + "..."
+                if len(text) > preview_len
+                else text
+            )
+        enriched.append(entry)
+    return enriched

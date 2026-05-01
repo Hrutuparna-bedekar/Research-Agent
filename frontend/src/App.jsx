@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useReducer, useCallback } from "react";
 import "./index.css";
 
-import { startResearch, getSessions } from "./api";
+import { startResearch, getSessions, BASE } from "./api";
 import { useSSE } from "./hooks/useSSE";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ExportButton } from "./components/ExportButton";
 import {
   UserBubble,
   AgentBubble,
+  AgentAvatar,
   TypingIndicator,
   ProgressTracker,
   ReportView,
@@ -205,8 +206,8 @@ export default function App() {
     setActive(session.session_id);
     
     Promise.all([
-      fetch(`http://localhost:8000/api/research/${session.session_id}/history`).then(r => r.json()),
-      fetch(`http://localhost:8000/api/research/${session.session_id}/report`).then(r => r.json()),
+      fetch(`${BASE}/research/${session.session_id}/history`).then(r => r.json()),
+      fetch(`${BASE}/research/${session.session_id}/report`).then(r => r.json()),
     ]).then(([historyData, reportData]) => {
       const history = (historyData.history || []).map(m => ({
         type: m.type === "user" ? MSG_USER : MSG_REPORT,
@@ -285,11 +286,10 @@ export default function App() {
             /* Empty state */
             <div className="empty-state">
               <div className="zeno-sphere-container">
-                <h1 style={{ marginTop: '24px', fontSize: '2.5rem', fontWeight: '700' }}>Hello,</h1>
-                <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)' }}>How can I help you today?</p>
+                <h1>Research Agent</h1>
+                <p>Ask anything — I'll research it in depth and deliver a structured report.</p>
               </div>
-              
-              <div className="suggestion-chips" style={{ marginTop: '40px' }}>
+              <div className="suggestion-chips">
                 {SUGGESTIONS.map((s) => (
                   <button key={s} className="chip" onClick={() => handleSubmit(s)}>
                     {s}
@@ -304,12 +304,12 @@ export default function App() {
                 if (m.type === MSG_USER) return <UserBubble key={m.id} text={m.text} />;
                 if (m.type === MSG_REPORT) return (
                   <div key={m.id} className="message-row">
-                    <div className="avatar" style={{ background: 'linear-gradient(135deg, #a78bfa, #6366f1)', color: 'white' }}>✨</div>
+                    <AgentAvatar />
                     <ReportView text={m.text} isStreaming={false} confidence={m.confidence} />
                   </div>
                 );
                 if (m.type === MSG_ERROR) return (
-                  <AgentBubble key={m.id}>⚠️ {m.text}</AgentBubble>
+                  <AgentBubble key={m.id}>⚠ {m.text}</AgentBubble>
                 );
                 return null;
               })}
@@ -320,7 +320,7 @@ export default function App() {
               {/* Progress tracker */}
               {hasProgress && !chat.reportText && (
                 <div className="message-row">
-                  <div className="avatar" style={{ background: 'linear-gradient(135deg, #a78bfa, #6366f1)', color: 'white' }}>✨</div>
+                  <AgentAvatar />
                   <ProgressTracker nodeStates={chat.nodeStates} />
                 </div>
               )}
@@ -328,7 +328,7 @@ export default function App() {
               {/* ACTIVE Streaming/current report */}
               {chat.reportText && (
                 <div className="message-row">
-                  <div className="avatar" style={{ background: 'linear-gradient(135deg, #a78bfa, #6366f1)', color: 'white' }}>✨</div>
+                  <AgentAvatar />
                   <ReportView
                     text={chat.reportText}
                     isStreaming={chat.isStreaming}

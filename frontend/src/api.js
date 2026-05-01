@@ -1,4 +1,5 @@
-const BASE = "http://localhost:8000/api";
+const envUrl = import.meta.env.VITE_API_URL;
+export const BASE = envUrl ? (envUrl.endsWith('/api') ? envUrl : `${envUrl}/api`) : "http://localhost:8000/api";
 
 export const startResearch = async (query, sessionId = null) => {
   const res = await fetch(`${BASE}/research/start`, {

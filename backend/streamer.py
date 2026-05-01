@@ -3,6 +3,7 @@ import asyncio
 import json
 import sys
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -24,6 +25,11 @@ def _get_wf():
 
 
 _executor = ThreadPoolExecutor(max_workers=4)
+
+# Delay between streamed word-chunks (seconds).
+# Increase to slow down, decrease to speed up.
+# Override via STREAM_DELAY_MS env var (e.g. STREAM_DELAY_MS=50 for slower).
+_CHUNK_DELAY: float = int(os.getenv("STREAM_DELAY_MS", "30")) / 1000.0
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -108,9 +114,10 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                 if (node_name in ("generate_report", "chat_response")) and "final_output" in node_output:
                     report_text = node_output["final_output"]
                     session.report = report_text
-                    # Simulate token chunks (split by words for smooth UX)
+                    # Stream word-by-word with a small delay for a smooth typewriter effect.
+                    # chunk_size controls how many words per SSE event.
                     words = report_text.split(" ")
-                    chunk_size = 5
+                    chunk_size = 3  # fewer words per chunk = smoother, more visible effect
                     for i in range(0, len(words), chunk_size):
                         chunk_text = " ".join(words[i:i+chunk_size]) + " "
                         put({
@@ -118,6 +125,7 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                             "node": node_name,
                             "data": {"chunk": chunk_text},
                         })
+                        time.sleep(_CHUNK_DELAY)  # throttle the stream
 
                 # Update session metadata from reflect node
                 if node_name == "reflect":

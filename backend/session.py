@@ -75,7 +75,7 @@ class SessionManager:
         if session_id in self._active_sessions:
             return self._active_sessions[session_id]
         
-        # Load from DB
+       
         conn = sqlite3.connect(str(DB_PATH))
         row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         conn.close()

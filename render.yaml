@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: research-agent-backend
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    # Run from repo root so relative paths (data/) resolve correctly
+    startCommand: "python backend/run.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: GROQ_API_KEY
+        sync: false
+      # Must match the key name used in agent.py: os.getenv("TAVILY_KEY")
+      - key: TAVILY_KEY
+        sync: false
+      - key: FRONTEND_URL
+        fromService:
+          type: static
+          name: research-agent-frontend
+          envVarKey: RENDER_EXTERNAL_URL
+      # Streaming speed (ms per word-chunk). Adjust here without code changes.
+      - key: STREAM_DELAY_MS
+        value: "30"
+
+  - type: static
+    name: research-agent-frontend
+    buildCommand: "cd frontend && npm install && npm run build"
+    publishPath: "frontend/dist"
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: research-agent-backend
+          envVarKey: RENDER_EXTERNAL_URL
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

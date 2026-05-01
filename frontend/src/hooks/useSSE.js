@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 
-const BASE = "http://localhost:8000/api";
+import { BASE } from "../api";
 
 /**
  * useSSE

@@ -27,12 +27,12 @@ ENV/
 
 # Environment Variables
 .env
-config.py
 
 # Project Specific
 data/
 backend/data/
 *.db
+*.sqlite3
 *.log
 
 # IDEs

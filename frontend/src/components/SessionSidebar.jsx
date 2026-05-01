@@ -21,8 +21,12 @@ export function SessionSidebar({ sessions, activeId, onSelect, onNew, onDeleted 
     <aside className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">🔬</div>
-          <span className="sidebar-logo-text">ResearchAI</span>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent-light)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="sidebar-logo-icon-svg">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+            <path d="M2 17l10 5 10-5"></path>
+            <path d="M2 12l10 5 10-5"></path>
+          </svg>
+          <span className="sidebar-logo-text">ResearchAgent</span>
         </div>
         <button className="new-chat-btn" onClick={onNew}>
           <span>✚</span>
