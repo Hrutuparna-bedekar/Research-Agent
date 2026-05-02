@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from pathlib import Path
 
-DB_PATH = Path("data/sessions.db")
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "sessions.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 def init_db():

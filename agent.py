@@ -34,10 +34,11 @@ embeddings=HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-CHECKPOINT_DB = Path("data/checkpoints.sqlite3")
+_REPO_ROOT = Path(__file__).resolve().parent
+CHECKPOINT_DB = _REPO_ROOT / "data" / "checkpoints.sqlite3"
 CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
 
-RAG_DB=Path("data/Rag.sqlite3")
+RAG_DB = _REPO_ROOT / "data" / "Rag.sqlite3"
 RAG_DB.parent.mkdir(parents=True, exist_ok=True)
 
 def json_parser(text:str)->Any:
