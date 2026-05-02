@@ -5,7 +5,7 @@ import os
 import re 
 from langgraph.graph import StateGraph,END,START
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 
 from langchain_core.messages import HumanMessage, RemoveMessage, BaseMessage, SystemMessage, AIMessage
 from dotenv import load_dotenv
@@ -23,15 +23,17 @@ load_dotenv()
 TAVILY_KEY=os.getenv("TAVILY_KEY")
 GROQ_API_KEY=os.getenv("GROQ_API_KEY")
 
-model= ChatGroq(
+model=ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0.2,
     max_tokens=1024,
     groq_api_key=GROQ_API_KEY
 )
 
-embeddings=HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+embeddings = HuggingFaceEndpointEmbeddings(
+    huggingfacehub_api_token=HF_API_TOKEN,
+    model="sentence-transformers/all-MiniLM-L6-v2"
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent
@@ -75,8 +77,15 @@ def json_parser(text:str)->Any:
  
 
 def deduplication(queries:list[str],visited:list[str]):
+    # Safety: ensure queries is a list
+    if isinstance(queries, str):
+        queries = [queries]
+    
     out:list[str]=[]
     all_texts=queries+visited
+    if not all_texts:
+        return []
+        
     all_embed=embeddings.embed_documents(all_texts)
     query_embeds=all_embed[:len(queries)]
     visited_embed=all_embed[len(queries):]
@@ -336,7 +345,8 @@ Query: {query}""")
             ]
         }
     plan=output_llm.get("plan",[])
-    first_queries=deduplication(plan[0]["queries"] if plan else query,[])
+    # Fix: Ensure query is wrapped in a list if plan is empty
+    first_queries=deduplication(plan[0]["queries"] if plan else [query],[])
     return {
         "research_type":output_llm["research_type"],
         "complexity":output_llm["complexity"],

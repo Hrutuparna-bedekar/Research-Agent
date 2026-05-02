@@ -13,6 +13,8 @@ services:
       # Must match the key name used in agent.py: os.getenv("TAVILY_KEY")
       - key: TAVILY_KEY
         sync: false
+      - key: HF_API_TOKEN
+        sync: false
       - key: FRONTEND_URL
         fromService:
           type: static
