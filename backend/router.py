@@ -51,7 +51,6 @@ async def stream_research(session_id: str):
         headers={
             "Cache-Control":               "no-cache",
             "X-Accel-Buffering":           "no",      
-            "Access-Control-Allow-Origin": "*",
         },
     )
 
