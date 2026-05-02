@@ -4,7 +4,7 @@ services:
     env: python
     buildCommand: "pip install -r requirements.txt"
     # Run from repo root so relative paths (data/) resolve correctly
-    startCommand: "python3 Backend/run.py"
+    startCommand: "python3 backend/run.py"
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
