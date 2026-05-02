@@ -17,17 +17,18 @@ services:
         sync: false
       - key: FRONTEND_URL
         fromService:
-          type: static_site
+          type: web
           name: research-agent-frontend
           envVarKey: RENDER_EXTERNAL_URL
       # Streaming speed (ms per word-chunk). Adjust here without code changes.
       - key: STREAM_DELAY_MS
         value: "30"
 
-  - type: static_site
+  - type: web
     name: research-agent-frontend
+    runtime: static
     buildCommand: "cd frontend && npm install && npm run build"
-    publishPath: "frontend/dist"
+    staticPublishPath: "frontend/dist"
     envVars:
       - key: VITE_API_URL
         fromService:
