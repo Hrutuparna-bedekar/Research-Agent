@@ -1,8 +1,8 @@
-# Research Agent 🤖
+# Research Agent 
 
 An AI-powered multi-step research agent with SSE streaming, structured for performance and scalability.
 
-## 🚀 Startup Guide
+##  Startup Guide
 
 ### 1. Backend Setup
 Make sure you are in the root directory.
