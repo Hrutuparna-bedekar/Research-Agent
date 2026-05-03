@@ -122,6 +122,7 @@ export default function App() {
   const [chat, dispatch]              = useReducer(chatReducer, initialChat);
   const [input, setInput]             = useState("");
   const [isSubmitting, setSubmitting] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
@@ -249,16 +250,21 @@ export default function App() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarOpen ? "sidebar-open" : ""}`}>
+      <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
       <SessionSidebar
         sessions={sessions}
         activeId={activeSessionId}
-        onSelect={handleSelectSession}
+        onSelect={(s) => {
+          handleSelectSession(s);
+          setSidebarOpen(false); // close on mobile after selection
+        }}
         onNew={() => {
           setActive(null);
           dispatch({ type: "NEW_QUERY", query: "" });
           setInput("");
           setSubmitting(false);
+          setSidebarOpen(false); // close on mobile
           // clear chat
           dispatch({ type: "DONE" });
           window.location.reload(); // simplest reset
@@ -272,9 +278,23 @@ export default function App() {
       <div className="main">
         {/* Header */}
         <div className="chat-header">
-          <span className="header-title">
-            {activeQuery || "Research Agent"}
-          </span>
+          <div className="header-left">
+            <button 
+              className="menu-toggle" 
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open sidebar"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" 
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </button>
+            <span className="header-title">
+              {activeQuery || "Research Agent"}
+            </span>
+          </div>
           <div className="header-actions">
             <ExportButton sessionId={activeSessionId} disabled={!canExport} />
           </div>

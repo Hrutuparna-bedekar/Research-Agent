@@ -304,6 +304,30 @@ html, body, #root {
   border-bottom: 1px solid var(--border);
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.menu-toggle {
+  display: none; /* hidden on desktop */
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px;
+  margin-left: -8px;
+  border-radius: var(--r-sm);
+  transition: all var(--transition);
+}
+
+.menu-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .header-title {
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -871,4 +895,111 @@ html, body, #root {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.5; }
+}/* ══════════════════════════════════════════════════════════
+   RESPONSIVENESS
+   ══════════════════════════════════════════════════════════ */
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
+  z-index: 15;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --chat-pad: 24px;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --chat-pad: 16px;
+  }
+
+  .menu-toggle {
+    display: flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: -100%;
+    top: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 30;
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .app-shell.sidebar-open .sidebar {
+    left: 0;
+    box-shadow: 20px 0 50px rgba(0,0,0,0.5);
+  }
+
+  .app-shell.sidebar-open .sidebar-overlay {
+    display: block;
+  }
+
+  .chat-header {
+    padding: 0 var(--chat-pad);
+  }
+
+  .header-title {
+    max-width: 200px;
+    font-size: 14px;
+  }
+
+  .messages-area {
+    padding-top: var(--sp-2);
+  }
+
+  .message-row.user {
+    max-width: 95%;
+  }
+
+  .bubble.user {
+    max-width: 90%;
+  }
+
+  .input-bar {
+    padding-bottom: var(--sp-2);
+  }
+
+  .empty-state h1 {
+    font-size: 1.5rem;
+  }
+
+  .suggestion-chips {
+    gap: 8px;
+  }
+
+  .chip {
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-title {
+    max-width: 140px;
+  }
+  
+  .bubble {
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+
+  .avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+  }
 }
