@@ -1,7 +1,7 @@
 from typing import Optional
 
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -13,23 +13,37 @@ from exporter import to_markdown_bytes, to_pdf_bytes
 router = APIRouter(prefix="/api")
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def get_session_for_user(session_id: str, user_id: Optional[str]):
+    session = session_manager.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # If a user_id is provided (not "default" or None), enforce ownership
+    if user_id and user_id != "default" and session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied to this session")
+    return session
+
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
 class StartRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 # ── Research endpoints ────────────────────────────────────────────────────────
 
 @router.post("/research/start")
-async def start_research(body: StartRequest):
+async def start_research(body: StartRequest, x_user_id: Optional[str] = Header(None)):
     
     if not body.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    session = session_manager.create(body.query.strip(), session_id=body.session_id)
-    launch(session)  # non-blocking — submits to thread pool
+    user_id = body.user_id or x_user_id or "default"
+    session = session_manager.create(body.query.strip(), session_id=body.session_id, user_id=user_id)
+    await launch(session)  # non-blocking — submits to thread pool
 
     return {
         "session_id": session.session_id,
@@ -39,11 +53,9 @@ async def start_research(body: StartRequest):
 
 
 @router.get("/research/{session_id}/stream")
-async def stream_research(session_id: str):
+async def stream_research(session_id: str, x_user_id: Optional[str] = Header(None), user_id: Optional[str] = Query(None)):
     """SSE endpoint — streams node events and report chunks."""
-    session = session_manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_session_for_user(session_id, x_user_id or user_id)
 
     return StreamingResponse(
         sse_generator(session),
@@ -56,30 +68,21 @@ async def stream_research(session_id: str):
 
 
 @router.get("/research/{session_id}/status")
-async def get_status(session_id: str):
-    
-    session = session_manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def get_status(session_id: str, x_user_id: Optional[str] = Header(None)):
+    session = get_session_for_user(session_id, x_user_id)
     return session.to_dict()
 
 
 @router.get("/research/{session_id}/history")
-async def get_session_history(session_id: str):
-    session = session_manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
+async def get_session_history(session_id: str, x_user_id: Optional[str] = Header(None)):
+    session = get_session_for_user(session_id, x_user_id)
     history = get_thread_history(session.thread_id)
     return {"history": history}
 
 
 @router.get("/research/{session_id}/report")
-async def get_report(session_id: str):
-  
-    session = session_manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def get_report(session_id: str, x_user_id: Optional[str] = Header(None)):
+    session = get_session_for_user(session_id, x_user_id)
     if session.status != "done":
         raise HTTPException(status_code=202, detail="Report not ready yet")
     return {"report": session.report, "confidence": session.confidence}
@@ -87,9 +90,9 @@ async def get_report(session_id: str):
 
 
 @router.get("/research/{session_id}/export/markdown")
-async def export_markdown(session_id: str):
-    session = session_manager.get(session_id)
-    if not session or not session.report:
+async def export_markdown(session_id: str, user_id: Optional[str] = Query(None)):
+    session = get_session_for_user(session_id, user_id)
+    if not session.report:
         raise HTTPException(status_code=404, detail="Report not available")
 
     data = to_markdown_bytes(session.report, session.query)
@@ -102,9 +105,9 @@ async def export_markdown(session_id: str):
 
 
 @router.get("/research/{session_id}/export/pdf")
-async def export_pdf(session_id: str):
-    session = session_manager.get(session_id)
-    if not session or not session.report:
+async def export_pdf(session_id: str, user_id: Optional[str] = Query(None)):
+    session = get_session_for_user(session_id, user_id)
+    if not session.report:
         raise HTTPException(status_code=404, detail="Report not available")
 
     try:
@@ -123,12 +126,15 @@ async def export_pdf(session_id: str):
 # ── Session management ────────────────────────────────────────────────────────
 
 @router.get("/sessions")
-async def list_sessions():
-    return {"sessions": session_manager.all()}
+async def list_sessions(x_user_id: Optional[str] = Header(None)):
+    return {"sessions": session_manager.all(user_id=x_user_id)}
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, x_user_id: Optional[str] = Header(None)):
+    # Verify ownership before deletion
+    get_session_for_user(session_id, x_user_id)
+    
     if not session_manager.delete(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"deleted": session_id}

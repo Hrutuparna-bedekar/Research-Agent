@@ -81,14 +81,16 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
     """
     Runs in a ThreadPoolExecutor thread.
     Calls wf.stream() synchronously, converts each chunk to an SSE event,
-    and puts it on the session queue via the event loop.
+    and broadcasts it to all subscribers via the event loop.
     """
     def put(event: dict):
-        loop.call_soon_threadsafe(session.queue.put_nowait, event)
+        loop.call_soon_threadsafe(session.broadcast, event)
 
     try:
         wf = _get_wf()
-        session.status = "running"
+        # Thread-safe status update
+        with session._lock:
+            session.status = "running"
         session_manager.update(session)
 
         input_state = {
@@ -102,7 +104,7 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                 if not isinstance(node_output, dict):
                     continue
 
-                # Node started (emit before processing)
+                # Node started
                 put({
                     "type": "node_start",
                     "node": node_name,
@@ -110,14 +112,12 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                     "data": {},
                 })
 
-                # Special handling: stream report or chat response token by token
                 if (node_name in ("generate_report", "chat_response")) and "final_output" in node_output:
                     report_text = node_output["final_output"]
-                    session.report = report_text
-                    # Stream word-by-word with a small delay for a smooth typewriter effect.
-                    # chunk_size controls how many words per SSE event.
+                    with session._lock:
+                        session.report = report_text
                     words = report_text.split(" ")
-                    chunk_size = 3  # fewer words per chunk = smoother, more visible effect
+                    chunk_size = 3 
                     for i in range(0, len(words), chunk_size):
                         chunk_text = " ".join(words[i:i+chunk_size]) + " "
                         put({
@@ -125,13 +125,11 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                             "node": node_name,
                             "data": {"chunk": chunk_text},
                         })
-                        time.sleep(_CHUNK_DELAY)  # throttle the stream
+                        time.sleep(_CHUNK_DELAY)
 
-                # Update session metadata from reflect node
                 if node_name == "reflect":
-                    session.confidence  = node_output.get("confidence", 0)
-                    session.plan_steps  = node_output.get("plan_step_index", 0)
-                    session.gap_passes  = node_output.get("gap_step_index", 0)
+                    with session._lock:
+                        session.confidence  = node_output.get("confidence", 0)
 
                 # Node done
                 put({
@@ -141,49 +139,57 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
                     "data": _node_summary(node_name, node_output),
                 })
 
-        session.status = "done"
-        import datetime
-        session.finished_at = datetime.datetime.utcnow()
+        with session._lock:
+            session.status = "done"
+            import datetime
+            session.finished_at = datetime.datetime.utcnow()
         session_manager.update(session)
         put({"type": "done", "node": None, "data": {"session_id": session.session_id}})
 
     except Exception as exc:
-        session.status = "error"
-        session.error = str(exc)
+        with session._lock:
+            session.status = "error"
         session_manager.update(session)
         put({"type": "error", "node": None, "data": {"message": str(exc)}})
 
 
 # ── public API ────────────────────────────────────────────────────────────────
 
-def launch(session: Session):
+async def launch(session: Session):
     """
     Submit the agent to the thread pool.
-    Returns immediately — the SSE stream will drain the queue.
+    Ensures only one run per session at a time using run_lock.
     """
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(_executor, _run_agent_thread, session, loop)
+    if session.run_lock.locked():
+        # Already running, just let the new subscriber pick up the existing stream
+        return
+
+    async with session.run_lock:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_executor, _run_agent_thread, session, loop)
 
 
 async def sse_generator(session: Session):
     """
-    Async generator that drains the session queue and yields
-    properly formatted text/event-stream lines.
+    Async generator that subscribes to the session's broadcast system.
     """
-    SENTINEL = object()
-    timeout_seconds = 300  # 5-minute max per session
+    q = session.subscribe()
+    timeout_seconds = 300 
 
-    while True:
-        try:
-            event = await asyncio.wait_for(session.queue.get(), timeout=timeout_seconds)
-        except asyncio.TimeoutError:
-            yield _fmt({"type": "error", "data": {"message": "Session timed out"}})
-            break
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                yield _fmt({"type": "error", "data": {"message": "Session timed out"}})
+                break
 
-        yield _fmt(event)
+            yield _fmt(event)
 
-        if event.get("type") in ("done", "error"):
-            break
+            if event.get("type") in ("done", "error"):
+                break
+    finally:
+        session.unsubscribe(q)
 
 
 def _fmt(event: dict) -> str:

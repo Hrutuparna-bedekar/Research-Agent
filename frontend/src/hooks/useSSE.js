@@ -24,7 +24,8 @@ export function useSSE(sessionId, onEvent, onDone) {
     if (!sessionId) return;
     close(); // close any previous connection
 
-    const es = new EventSource(`${BASE}/research/${sessionId}/stream`);
+    const uid = localStorage.getItem("research_user_id") || "default";
+    const es = new EventSource(`${BASE}/research/${sessionId}/stream?user_id=${uid}`);
     esRef.current = es;
 
     es.onmessage = (e) => {

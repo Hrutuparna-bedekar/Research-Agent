@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useReducer, useCallback } from "react";
 import "./index.css";
 
-import { startResearch, getSessions, BASE } from "./api";
+import { startResearch, getSessions, getHistory, getReport, BASE } from "./api";
 import { useSSE } from "./hooks/useSSE";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { ExportButton } from "./components/ExportButton";
@@ -207,8 +207,8 @@ export default function App() {
     setActive(session.session_id);
     
     Promise.all([
-      fetch(`${BASE}/research/${session.session_id}/history`).then(r => r.json()),
-      fetch(`${BASE}/research/${session.session_id}/report`).then(r => r.json()),
+      getHistory(session.session_id),
+      getReport(session.session_id),
     ]).then(([historyData, reportData]) => {
       const history = (historyData.history || []).map(m => ({
         type: m.type === "user" ? MSG_USER : MSG_REPORT,

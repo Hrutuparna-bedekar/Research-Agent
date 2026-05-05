@@ -2,6 +2,7 @@ import asyncio
 import uuid
 import sqlite3
 import json
+import threading
 from datetime import datetime
 from typing import Optional, List, Dict
 from pathlib import Path
@@ -11,37 +12,83 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 def init_db():
     conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            query TEXT,
-            status TEXT,
-            report TEXT,
-            confidence REAL,
-            started_at TEXT,
-            finished_at TEXT
-        )
-    """)
+    # Check if user_id column exists
+    cursor = conn.execute("PRAGMA table_info(sessions)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    if not columns:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                query TEXT,
+                status TEXT,
+                report TEXT,
+                confidence REAL,
+                started_at TEXT,
+                finished_at TEXT
+            )
+        """)
+    elif "user_id" not in columns:
+        conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT")
+        
     conn.commit()
     conn.close()
 
 init_db()
 
 class Session:
-    def __init__(self, session_id: str, query: str):
+    def __init__(self, session_id: str, query: str, user_id: str = "default"):
         self.session_id  = session_id
+        self.user_id     = user_id
         self.query       = query
         self.thread_id   = session_id          
         self.status      = "pending"
-        self.queue: asyncio.Queue = asyncio.Queue()
         self.report      = ""
         self.confidence  = 0.0
         self.started_at  = datetime.utcnow()
         self.finished_at: Optional[datetime] = None
+        
+        # Streaming state
+        self._subscribers: List[asyncio.Queue] = []
+        self._event_history: List[dict] = []
+        self._lock = threading.Lock() # For thread-safe status/meta updates
+        self.run_lock = asyncio.Lock() # To prevent concurrent agent runs
+
+    def broadcast(self, event: dict):
+        """Send an event to all active SSE subscribers and save to history."""
+        if event.get("type") not in ("report_chunk"): # Don't bloat history with every tiny chunk
+             self._event_history.append(event)
+        
+        for q in self._subscribers:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+    def subscribe(self) -> asyncio.Queue:
+        """Create a new queue for a subscriber and replay history."""
+        q = asyncio.Queue()
+        # Replay history so reconnected clients catch up
+        for event in self._event_history:
+            q.put_nowait(event)
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue):
+        if q in self._subscribers:
+            self._subscribers.remove(q)
+
+    def clear_run_state(self):
+        """Prepare for a new agent run."""
+        self._event_history = []
+        self.status = "pending"
+        self.report = ""
 
     def to_dict(self) -> dict:
         return {
             "session_id":  self.session_id,
+            "user_id":     self.user_id,
             "query":       self.query,
             "status":      self.status,
             "confidence":  self.confidence,
@@ -54,18 +101,18 @@ class SessionManager:
     def __init__(self):
         self._active_sessions: Dict[str, Session] = {}
 
-    def create(self, query: str, session_id: Optional[str] = None) -> Session:
+    def create(self, query: str, session_id: Optional[str] = None, user_id: str = "default") -> Session:
         sid = session_id or str(uuid.uuid4())[:8]
         
        
         if sid in self._active_sessions:
             session = self._active_sessions[sid]
             session.query = query 
-            session.status = "pending"
-            session.queue = asyncio.Queue()
+            session.user_id = user_id
+            session.clear_run_state()
             return session
 
-        session = Session(sid, query)
+        session = Session(sid, query, user_id=user_id)
         self._active_sessions[sid] = session
         self._save_to_db(session)
         return session
@@ -81,19 +128,23 @@ class SessionManager:
         conn.close()
         
         if row:
-            s = Session(row[0], row[1])
-            s.status = row[2]
-            s.report = row[3]
-            s.confidence = row[4]
-            s.started_at = datetime.fromisoformat(row[5])
-            if row[6]: s.finished_at = datetime.fromisoformat(row[6])
+            # Table info: session_id(0), user_id(1), query(2), status(3), report(4), confidence(5), started_at(6), finished_at(7)
+            s = Session(row[0], row[2], user_id=row[1])
+            s.status = row[3]
+            s.report = row[4]
+            s.confidence = row[5]
+            s.started_at = datetime.fromisoformat(row[6])
+            if row[7]: s.finished_at = datetime.fromisoformat(row[7])
             self._active_sessions[session_id] = s
             return s
         return None
 
-    def all(self) -> List[Dict]:
+    def all(self, user_id: Optional[str] = None) -> List[Dict]:
         conn = sqlite3.connect(str(DB_PATH))
-        rows = conn.execute("SELECT session_id, query, status, confidence, started_at, finished_at, report FROM sessions ORDER BY started_at DESC").fetchall()
+        if user_id:
+            rows = conn.execute("SELECT session_id, query, status, confidence, started_at, finished_at, report, user_id FROM sessions WHERE user_id = ? ORDER BY started_at DESC", (user_id,)).fetchall()
+        else:
+            rows = conn.execute("SELECT session_id, query, status, confidence, started_at, finished_at, report, user_id FROM sessions ORDER BY started_at DESC").fetchall()
         conn.close()
         
         return [
@@ -104,7 +155,8 @@ class SessionManager:
                 "confidence": r[3],
                 "started_at": r[4],
                 "finished_at": r[5],
-                "has_report": bool(r[6])
+                "has_report": bool(r[6]),
+                "user_id": r[7]
             } for r in rows
         ]
 
@@ -112,10 +164,11 @@ class SessionManager:
         conn = sqlite3.connect(str(DB_PATH))
         conn.execute("""
             INSERT OR REPLACE INTO sessions 
-            (session_id, query, status, report, confidence, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (session_id, user_id, query, status, report, confidence, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session.session_id,
+            session.user_id,
             session.query,
             session.status,
             session.report,
