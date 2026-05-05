@@ -155,18 +155,19 @@ def _run_agent_thread(session: Session, loop: asyncio.AbstractEventLoop):
 
 # ── public API ────────────────────────────────────────────────────────────────
 
-async def launch(session: Session):
+def launch(session: Session):
     """
-    Submit the agent to the thread pool.
-    Ensures only one run per session at a time using run_lock.
+    Submit the agent to the thread pool in a non-blocking background task.
     """
-    if session.run_lock.locked():
-        # Already running, just let the new subscriber pick up the existing stream
-        return
+    async def _run_in_background():
+        if session.run_lock.locked():
+            return
+            
+        async with session.run_lock:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(_executor, _run_agent_thread, session, loop)
 
-    async with session.run_lock:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(_executor, _run_agent_thread, session, loop)
+    asyncio.create_task(_run_in_background())
 
 
 async def sse_generator(session: Session):

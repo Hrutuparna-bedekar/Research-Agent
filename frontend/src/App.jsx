@@ -66,9 +66,9 @@ function chatReducer(state, action) {
       return {
         messages:   messages,
         nodeStates: {},
-        reportText: action.report || "",
-        isStreaming: false,
-        isDone:     !!action.report,
+        reportText: "", // Keep reportText clear; historical reports are in action.messages
+        isStreaming: action.status === "running",
+        isDone:     !!action.report || action.status === "done",
         confidence: action.confidence || null,
       };
     }
@@ -130,7 +130,13 @@ export default function App() {
   // ── Load sessions on mount ────────────────────────────────
   useEffect(() => {
     getSessions()
-      .then((d) => setSessions(d.sessions ?? []))
+      .then((d) => {
+        const list = d.sessions ?? [];
+        setSessions(list);
+        
+        // If there's an active session in the URL or state that is still running, auto-resume
+        // (For now, just load the list; handleSelectSession will trigger the stream)
+      })
       .catch(console.error);
   }, []);
 
@@ -216,9 +222,13 @@ export default function App() {
         id:   Math.random()
       }));
 
+      const isRunning = session.status === "running";
+      if (isRunning) setSubmitting(true);
+
       dispatch({ 
         type: "LOAD_SESSION", 
         query: session.query, 
+        status: session.status,
         messages: history.length > 0 ? history : null,
         report: reportData.report, 
         confidence: reportData.confidence 

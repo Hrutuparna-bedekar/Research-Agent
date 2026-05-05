@@ -43,7 +43,7 @@ async def start_research(body: StartRequest, x_user_id: Optional[str] = Header(N
 
     user_id = body.user_id or x_user_id or "default"
     session = session_manager.create(body.query.strip(), session_id=body.session_id, user_id=user_id)
-    await launch(session)  # non-blocking — submits to thread pool
+    launch(session)  # non-blocking — starts background task
 
     return {
         "session_id": session.session_id,
