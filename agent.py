@@ -24,7 +24,7 @@ TAVILY_KEY=os.getenv("TAVILY_KEY")
 GROQ_API_KEY=os.getenv("GROQ_API_KEY")
 
 model=ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     temperature=0.2,
     max_tokens=1024,
     groq_api_key=GROQ_API_KEY
@@ -77,7 +77,7 @@ def json_parser(text:str)->Any:
  
 
 def deduplication(queries:list[str],visited:list[str]):
-    # Safety: ensure queries is a list
+  
     if isinstance(queries, str):
         queries = [queries]
     
@@ -89,8 +89,7 @@ def deduplication(queries:list[str],visited:list[str]):
     all_embed=embeddings.embed_documents(all_texts)
     query_embeds=all_embed[:len(queries)]
     visited_embed=all_embed[len(queries):]
-    # visited_embed_dup grows as we accept queries, preventing
-    # intra-batch duplicates as well as duplicates with visited.
+   
     visited_embed_dup=list(visited_embed)
     
     for query,query_embed in zip(queries,query_embeds):
@@ -127,7 +126,7 @@ class SQLiteRAG:
 
     @classmethod
     def get(cls)->"SQLiteRAG":
-        # Double-checked locking for thread-safe singleton initialisation.
+      
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -148,7 +147,7 @@ class SQLiteRAG:
 
     def store(self, content: str, metadata: dict):
         doc_id = self.doc_id(content)
-        with self._write_lock:  # serialise writes to prevent concurrent INSERT conflicts
+        with self._write_lock: 
             exists = self.conn.execute(
                 "SELECT 1 FROM documents WHERE id=?", (doc_id,)
             ).fetchone()
@@ -222,9 +221,7 @@ def run_async(coroutine):
     try:
         return asyncio.run(coroutine)
     except RuntimeError:
-        # Already inside a running event loop (e.g. Jupyter / testing).
-        # Import and apply nest_asyncio lazily — never touches the global
-        # FastAPI event loop under normal execution.
+  
         import nest_asyncio
         nest_asyncio.apply()
         return asyncio.get_event_loop().run_until_complete(coroutine)
@@ -345,7 +342,7 @@ Query: {query}""")
             ]
         }
     plan=output_llm.get("plan",[])
-    # Fix: Ensure query is wrapped in a list if plan is empty
+ 
     first_queries=deduplication(plan[0]["queries"] if plan else [query],[])
     return {
         "research_type":output_llm["research_type"],
@@ -383,7 +380,7 @@ def execute_plan(state:State)->State:
     rag_hits = [doc for q in fresh for doc in rag.search(q, n=3)
                 if doc["relevance"] >= HIGH_RAG_THRESHOLD]
 
-    if rag_hits and gap_mode:
+    if rag_hits :
         
         all_docs = rag_hits
     else:
@@ -630,11 +627,12 @@ def route_after_reflect(state:State)->str:
     missing=state["missing_topics"]
     gap_step_index=state["gap_step_index"]
     
-    if conf < 0.2 and step_idx > 1 and missing and gap_step_index < MAX_GAP_LOOPS:
-        return "generate_gap_queries"
 
     if step_idx+1<len(state["plan"]):
         return "advance_plan"
+    
+    if conf < 0.2  and missing and gap_step_index < MAX_GAP_LOOPS:
+        return "generate_gap_queries"
     
     if conf>=CONF_THRESHOLD:
         return "generate_report"
@@ -756,12 +754,11 @@ def get_thread_history(thread_id: str, preview_len: int = 120):
         return []
 
     history = state.values.get("display_history", [])
-    # Enrich AI/report entries with a preview field for the sidebar
     enriched = []
     for entry in history:
         if entry.get("type") in ("report",) and "preview" not in entry:
             text = entry.get("text", "")
-            entry = dict(entry)  # don't mutate stored state
+            entry = dict(entry)  
             entry["preview"] = (
                 text[:preview_len] + "..."
                 if len(text) > preview_len
